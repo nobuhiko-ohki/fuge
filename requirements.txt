@@ -1,0 +1,7 @@
+# Bach Fugue Generator
+# No external dependencies - uses Python standard library only
+
+# For development/testing:
+# pytest>=7.0.0  # Optional: for advanced testing
+# black>=22.0.0  # Optional: for code formatting
+# mypy>=0.950    # Optional: for type checking
