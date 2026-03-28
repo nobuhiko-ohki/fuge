@@ -1,0 +1,42 @@
+
+================================================================================
+  コード進行: C major 3声フーガ (経過音オフ)
+================================================================================
+
+  ── 提示部 (Exposition) ──
+    m 1: C       Dm      C       Dm      │  I       ii      I       ii      [C major]
+    m 2: C       Dm      G       Bdim    │  I       ii      V       vii°    [C major]
+    m 3: Em      Dm      C       C       │  iii     ii      I       I       [C major]
+    m 4: C       G       Dm      G       │  I       V       ii      V       [C major]
+    m 5: C       F       C       G       │  I       IV      I       V       [C major]
+    m 6: C       G       Dm      G       │  I       V       ii      V       [C major]
+    m 7: C       C       C       Dm      │  I       I       I       ii      [C major]
+    m 8: C       Dm      C       Dm      │  I       ii      I       ii      [C major]
+    m 9: G       Bdim    Em      Dm      │  V       vii°    iii     ii      [C major]
+    m10: C       C       │  I       I       [C major]
+
+  ── 嬉遊部1 (Episode 1) ──
+    m10: C       G       C       G       │  I       V       I       V       [C major]
+    m11: C       G       Am      G       │  I       V       vi      V       [C major]
+    m12: Am      C       Am      E       │  I       iii     I       V       [A minor]
+
+  ── 中間提示1 (Middle Entry 1) ──
+    m13: Am      Bdim    Am      F       │  I       ii      I       vi      [A minor]
+    m14: C       Dm      C       Bdim    │  iii     IV      iii     ii      [A minor]
+    m15: C       Bdim    E       Am      │  iii     ii      V       I       [A minor]
+
+  ── 嬉遊部2 (Episode 2) ──
+    m16: C       G       C       G       │  I       V       I       V       [C major]
+    m17: C       G       Am      G       │  I       V       vi      V       [C major]
+    m18: F       C       F       G7      │  I       V       I       V7      [F major]
+
+  ── 中間提示2 (Middle Entry 2) ──
+    m19: F       Dm      Am      F       │  I       vi      iii     I       [F major]
+    m20: Gm      F       Edim    F       │  ii      I       vii°    I       [F major]
+    m21: Am      Dm      Edim    F       │  iii     vi      vii°    I       [F major]
+
+  ── 終止部 (Coda) ──
+    m22: C       Am      Em      C       │  I       vi      iii     I       [C major]
+    m23: F       G       G       C       │  IV      V       V       I       [C major]
+
+================================================================================

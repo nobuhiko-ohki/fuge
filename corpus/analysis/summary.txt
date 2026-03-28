@@ -1,0 +1,77 @@
+============================================================
+Bach MIDI コーパス解析サマリー
+============================================================
+解析ファイル数: 241
+エラー数: 9
+処理時間: 37.0 秒
+
+ジャンル分布:
+  unknown             : 125
+  fugue               : 43
+  prelude             : 33
+  invention           : 17
+  chorale             : 12
+  sonata              : 5
+  canon               : 4
+  toccata             : 2
+
+グローバルキー分布 (上位10):
+  G major             : 43
+  D minor             : 34
+  G minor             : 23
+  D major             : 16
+  C minor             : 16
+  Eb major            : 14
+  F major             : 12
+  C major             : 12
+  E minor             : 11
+  Bb major            : 9
+
+----------------------------------------
+フーガ: 43 件
+----------------------------------------
+声部数分布:
+  2 声: 5
+  3 声: 12
+  4 声: 25
+  5 声: 1
+
+長さ（拍）: min=108, max=673, 平均=235
+
+フーガのキー分布:
+  D major             : 3
+  F major             : 3
+  G major             : 3
+  G minor             : 3
+  C minor             : 3
+  C major             : 2
+  E minor             : 2
+  Ab major            : 2
+  A minor             : 2
+  Bb major            : 2
+  C# minor            : 2
+  D minor             : 2
+  Eb major            : 2
+  Eb minor            : 2
+  E major             : 2
+  F minor             : 1
+  F# major            : 1
+  F# minor            : 1
+  G# minor            : 1
+  Bb minor            : 1
+  B major             : 1
+  B minor             : 1
+  C# major            : 1
+
+セクション境界数: min=23, max=188, 平均=61.3
+
+エラー (9 件):
+  AIRGSTR4Part.MID.mid: Invalid track header: b'Trk\x00'
+  Fugue12.mid: Invalid track header: b'\x81p\x825'
+  Fugue19.mid: Invalid track header: b'\x92@@x'
+  Fugue6.mid: Invalid track header: b'4\x00\x919'
+  Prelude13.mid: Invalid track header: b'4\x813A'
+  Prelude14.mid: Invalid track header: b'\x00\x918@'
+  Prelude15.mid: Invalid track header: b'4\x8161'
+  Prelude19.mid: Invalid track header: b'\x818/\x00'
+  Prelude20.mid: Invalid track header: b'@<\x81>'

@@ -30,23 +30,55 @@ class ScaleDegree(Enum):
 class Pitch:
     """音高"""
     midi: int
-    
+
     @property
     def pitch_class(self) -> int:
         """ピッチクラス（0-11）"""
         return self.midi % 12
-    
+
     @property
     def octave(self) -> int:
         """オクターブ"""
         return self.midi // 12
+
+    @property
+    def name(self) -> str:
+        """音名（例: C4, F#5）"""
+        notes = ['C', 'C#', 'D', 'D#', 'E', 'F',
+                 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        octave = (self.midi // 12) - 1
+        note = notes[self.midi % 12]
+        return f"{note}{octave}"
+
+
+@dataclass
+class NoteEvent:
+    """音高＋音長
+
+    duration はサブビート単位:
+        4 = 四分音符
+        2 = 八分音符
+        1 = 十六分音符
+        6 = 付点四分音符
+        3 = 付点八分音符
+    """
+    pitch: Pitch
+    duration: int = 4  # デフォルト四分音符
+
+    @property
+    def midi(self) -> int:
+        return self.pitch.midi
+
+    @property
+    def pitch_class(self) -> int:
+        return self.pitch.pitch_class
 
 
 @dataclass
 class Interval:
     """音程"""
     semitones: int
-    
+
     @property
     def interval_class(self) -> int:
         """音程クラス（0-11）"""

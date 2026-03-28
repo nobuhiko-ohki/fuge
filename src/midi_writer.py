@@ -6,7 +6,15 @@ MIDI Writer - 標準ライブラリのみを使用したMIDIファイル生成
 
 import struct
 from typing import List, Tuple
-from counterpoint_engine import Pitch, Voice
+from harmony_rules_complete import Pitch
+
+from dataclasses import dataclass
+
+@dataclass
+class Voice:
+    """Voice data structure"""
+    pitches: List
+    name: str = ""
 
 
 class MIDIWriter:
@@ -79,7 +87,7 @@ class MIDIWriter:
         
         for pitch in voice.pitches:
             note_events = self._create_note_events(
-                pitch.midi_number, 
+                pitch.midi,
                 note_duration_ticks, 
                 velocity
             )
@@ -157,7 +165,7 @@ if __name__ == "__main__":
     print("=== MIDI Writer テスト ===\n")
     
     # テスト用の簡単なメロディ
-    from counterpoint_engine import Pitch, Voice
+    from harmony_rules_complete import Pitch
     
     # ド・レ・ミ・ファ・ソのメロディ
     test_voice = Voice([
