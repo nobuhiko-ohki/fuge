@@ -22,7 +22,9 @@ from fugue_realization import (
 )
 from midi_writer import MIDIWriter
 from fugue_composer import (
-    HarmonicPlan, FugueComposer, SectionSpec, build_midi, validate,
+    HarmonicPlan, FugueComposer, SectionSpec,
+    build_midi, apply_note_events_to_midi, validate,
+    TICKS_PER_BEAT,
 )
 
 # ------------------------------------------------------------------
@@ -418,8 +420,35 @@ def main():
         for w in report.warnings:
             print(f"  [WARN]  m{w.measure}.{w.beat_in_measure}: {w.description}")
 
-    # Layer 3: MIDI 出力
+    # Layer 3: MIDI 出力（ビートグリッドを NoteEvents で上書きし sub-beat 復元）
     midi_data = build_midi(voice_plan)
+
+    # --- 提示部: 主題/応答の NoteEvents を正確な duration で上書き ---
+    # compose_exposition() と同じロジックで移調量を計算
+    from fugue_realization import VOICE_RANGES as VR
+    for entry in entries:
+        vt = entry.voice_type
+        lo, hi = VR.get(vt, (36, 84))
+        first_p = entry.subject.notes[0].pitch.midi
+        tr = 0
+        while first_p + tr < lo: tr += 12
+        while first_p + tr > hi: tr -= 12
+        start_tick = entry.start_position * TICKS_PER_BEAT
+        apply_note_events_to_midi(
+            midi_data, vt, start_tick, entry.subject.notes, transpose=tr,
+        )
+
+    # --- 中間部: 移調主題/応答の NoteEvents を上書き ---
+    apply_note_events_to_midi(
+        midi_data, FugueVoiceType.BASS, MID_START * TICKS_PER_BEAT,
+        ART_OF_FUGUE_NOTES, transpose=-12,
+    )
+    apply_note_events_to_midi(
+        midi_data, FugueVoiceType.TENOR,
+        (MID_START + subject_len - 1) * TICKS_PER_BEAT,
+        ART_OF_FUGUE_ANSWER_NOTES, transpose=-12,
+    )
+
     out_path = os.path.join(os.path.dirname(__file__), "output_full.mid")
     write_midi(midi_data, out_path, tempo=72)
     print(f"\nMIDI出力: {out_path}")
