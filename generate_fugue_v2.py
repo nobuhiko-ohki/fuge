@@ -379,8 +379,9 @@ def main():
 
     best = None
     best_errors = 9999
+    best_warnings = 9999
 
-    NUM_SEEDS = 20
+    NUM_SEEDS = int(os.environ.get("GV2_NUM_SEEDS", "20"))
     print(f"\n{NUM_SEEDS}シードで生成:")
     for seed in range(NUM_SEEDS):
         # Layer 2: 全体声部生成
@@ -397,12 +398,12 @@ def main():
         n_warn = len(report.warnings)
         print(f"  seed={seed}: errors={n_err}, warnings={n_warn}")
 
-        if n_err < best_errors:
+        # errors 最小 → 同 errors なら warnings 最小 で選択
+        if (n_err < best_errors or
+                (n_err == best_errors and n_warn < best_warnings)):
             best_errors = n_err
+            best_warnings = n_warn
             best = (seed, voice_plan, report)
-
-        if n_err == 0:
-            break
 
     if best is None:
         print("\n全シードで失敗。")

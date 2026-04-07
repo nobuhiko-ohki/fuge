@@ -214,6 +214,18 @@ def _backtrack(
             if chord.third_pc not in curr_pcs:
                 return False
 
+        # (3b) C15: 導音重複禁止
+        # 2声以上が導音を持つとき、自由声部が含まれていれば禁止
+        # （ピン止め同士の重複は主題の都合なので容認）
+        key_b = harmonic_plan.key(beat)
+        lt_pc = key_b.leading_tone_pc
+        lt_voices = [vt for vt in curr if curr[vt] % 12 == lt_pc]
+        if len(lt_voices) >= 2:
+            free_lt = [vt for vt in lt_voices
+                       if not (vt in pinned and beat in pinned[vt])]
+            if free_lt:
+                return False
+
         # (4) 前拍なければ終了
         if not prev:
             return True
@@ -258,6 +270,14 @@ def _backtrack(
             ok, _ = proh.check_melodic_seventh(prev[vt], combo[i])
             if not ok:
                 return False
+            # C17+: 増2度禁止（短調 b6→#7 ペア、key-aware）
+            if abs(combo[i] - prev[vt]) == 3:
+                key_ctx = harmonic_plan.key(beat)
+                sc = key_ctx.scale
+                if len(sc) == 7:
+                    aug2_pair = {sc[5] % 12, sc[6] % 12}
+                    if {prev[vt] % 12, combo[i] % 12} == aug2_pair:
+                        return False
 
         return True
 
@@ -303,6 +323,26 @@ def _backtrack(
                 if ((lo_pc in prev_pcs and hi_pc in curr_pcs) or
                         (hi_pc in prev_pcs and lo_pc in curr_pcs)):
                     cost += 50.0
+
+        # C14: 導音未解決ペナルティ（ソフト）
+        # V→I 等（次の和音に導音が含まれない）場合のみペナルティ
+        if prev and beat > 0:
+            key_prev = harmonic_plan.key(beat - 1)
+            lt_pc = key_prev.leading_tone_pc
+            tonic_pc = key_prev.tonic_pc
+            curr_chord_tones = harmonic_plan.chord(beat).tones
+            if lt_pc not in curr_chord_tones:
+                for i, vt in enumerate(all_voices):
+                    if vt in pinned and beat in pinned[vt]:
+                        continue  # ピン止め拍は主題の論理を尊重
+                    if vt not in prev:
+                        continue
+                    if prev[vt] % 12 == lt_pc:
+                        curr_pc = combo[i] % 12
+                        if curr_pc != tonic_pc:
+                            cost += 40.0  # C14: 導音未解決
+                        elif combo[i] <= prev[vt]:
+                            cost += 5.0   # 上行解決でない（下降オクターブ）
 
         return cost
 
@@ -414,6 +454,26 @@ def validate(
 
     def is_outer(va: FugueVoiceType, vb: FugueVoiceType) -> bool:
         return {va, vb} == {FugueVoiceType.SOPRANO, FugueVoiceType.BASS}
+
+    # --- C15: 導音重複チェック ---
+    for beat in range(n):
+        key_b = harmonic_plan.key(beat)
+        lt_pc = key_b.leading_tone_pc
+        active_b = {vt: voice_plan.pitch(vt, beat)
+                    for vt in voices
+                    if voice_plan.pitch(vt, beat) is not None}
+        lt_voices = [vt for vt, p in active_b.items() if p % 12 == lt_pc]
+        if len(lt_voices) >= 2:
+            m, b = _loc(beat)
+            report.add(ValidationError(
+                beat=beat, measure=m, beat_in_measure=b,
+                category="leading_tone_doubled",
+                description=(
+                    f"導音重複: {_NOTE_NAMES.get(lt_pc, '?')} が"
+                    f" {', '.join(vt.value for vt in lt_voices)} に重複"
+                ),
+                severity="warning",
+            ))
 
     # --- 外音チェック（回帰防止） ---
     for beat in range(n):
@@ -549,6 +609,8 @@ def validate(
                     ))
 
         # 旋律制約
+        key_curr = harmonic_plan.key(beat)
+        key_prev_beat = harmonic_plan.key(beat - 1)
         for vt in vlist:
             if vt not in prev:
                 continue
@@ -568,6 +630,41 @@ def validate(
                     description=f"{msg}: {vt.value}",
                     severity="error",
                 ))
+            # C17+: 増2度チェック（b6→#7 ペア）
+            if abs(curr[vt] - prev[vt]) == 3:
+                sc = key_curr.scale
+                if len(sc) == 7:
+                    aug2_pair = {sc[5] % 12, sc[6] % 12}
+                    if {prev[vt] % 12, curr[vt] % 12} == aug2_pair:
+                        report.add(ValidationError(
+                            beat=beat, measure=m, beat_in_measure=b,
+                            category="augmented_second",
+                            description=(
+                                f"増2度旋律: {_NOTE_NAMES.get(prev[vt]%12,'?')}"
+                                f"→{_NOTE_NAMES.get(curr[vt]%12,'?')}"
+                                f": {vt.value}"
+                            ),
+                            severity="warning",
+                        ))
+            # C14: 導音未解決チェック
+            # 導音が次の和音に含まれない（V→I 等）場合のみ警告
+            # V→V のように導音を含む和音が続く場合は解決猶予あり
+            lt_pc = key_prev_beat.leading_tone_pc
+            tonic_pc = key_prev_beat.tonic_pc
+            if prev[vt] % 12 == lt_pc and curr[vt] % 12 != tonic_pc:
+                curr_chord_tones = harmonic_plan.chord(beat).tones
+                if lt_pc not in curr_chord_tones:
+                    report.add(ValidationError(
+                        beat=beat, measure=m, beat_in_measure=b,
+                        category="leading_tone_unresolved",
+                        description=(
+                            f"導音未解決: {_NOTE_NAMES.get(lt_pc,'?')}"
+                            f"→{_NOTE_NAMES.get(curr[vt]%12,'?')}"
+                            f" (期待={_NOTE_NAMES.get(tonic_pc,'?')})"
+                            f": {vt.value}"
+                        ),
+                        severity="warning",
+                    ))
 
     return report
 
