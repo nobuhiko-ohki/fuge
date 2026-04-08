@@ -112,6 +112,11 @@ _VOICE_ORDER: Dict[FugueVoiceType, int] = {
     FugueVoiceType.BASS:    3,
 }
 
+# 転回対位法（8度）音程クラス定数
+# 音程クラス = abs(cs_pitch - subject_pitch) % 12
+_ICP_FORBIDDEN = frozenset({1, 2, 6, 10, 11})  # 2度・増4度・7度（転回後も不協和）
+_ICP_CAUTIOUS  = frozenset({0, 5, 7})           # 同度/8度・4度(→5度転回)・5度(→4度転回)
+
 
 def _backtrack(
     harmonic_plan: HarmonicPlan,
@@ -760,10 +765,15 @@ class SectionSpec:
     fixed_entries:  [(声部, ピッチリスト)] — ピッチリスト[i] は区間内の i 拍目のピッチ。
                     None の要素は「その拍は自由生成」を意味する。
                     空リストの場合は全声部を自由生成（エピソード/コーダ用）。
+    cs_voices:      [(声部, 区間内開始オフセット)] — 対主題を割り当てる声部と開始拍。
+                    compose_full() が FugueComposer.countersubject を当該声部にピン止めする。
     """
     start: int
     length: int
     fixed_entries: List[Tuple[FugueVoiceType, List[Optional[int]]]] = field(
+        default_factory=list
+    )
+    cs_voices: List[Tuple[FugueVoiceType, int]] = field(
         default_factory=list
     )
 
@@ -793,6 +803,9 @@ class FugueComposer:
         self.harmonic_plan = harmonic_plan
         self.seed = seed
         self.rng = random.Random(seed)
+        # 対主題: compose_exposition() 実行後に設定される拍単位ピッチ列
+        # countersubject[i] = 区間内 i 拍目のMIDIピッチ（主題と同長）
+        self.countersubject: Optional[List[Optional[int]]] = None
 
     def _expand_subject_beats(
         self, entry: FugueEntry
@@ -958,6 +971,25 @@ class FugueComposer:
                         pinned[vt][i] = p
                         all_pitches[vt][start + i] = p  # 全体配列にも即時配置
 
+            # 対主題を cs_voices で指定された声部にピン止め
+            if self.countersubject and spec.cs_voices:
+                for cs_vt, cs_offset in spec.cs_voices:
+                    lo, hi = VOICE_RANGES.get(cs_vt, (36, 84))
+                    if cs_vt not in pinned:
+                        pinned[cs_vt] = {}
+                    for i, p in enumerate(self.countersubject):
+                        if p is None:
+                            continue
+                        beat_in_section = cs_offset + i
+                        if beat_in_section >= length:
+                            break
+                        # 音域に収まるようオクターブ移調
+                        while p < lo:
+                            p += 12
+                        while p > hi:
+                            p -= 12
+                        pinned[cs_vt][beat_in_section] = p
+
             bt_result = _backtrack(
                 harmonic_plan=section_plan,
                 pinned=pinned,
@@ -981,6 +1013,177 @@ class FugueComposer:
             }
 
         return VoicePlan.from_dicts(all_pitches, total_beats)
+
+    def generate_countersubject(
+        self,
+        subject_beats: List[int],
+        cs_harmony_plan: HarmonicPlan,
+        cs_voice: FugueVoiceType,
+        ensure_gap_voice_range: Optional[Tuple[int, int]] = None,
+        max_backtrack: int = 512,
+    ) -> Optional[List[int]]:
+        """転回対位法（8度）の原則に従い対主題を生成。
+
+        主題を定旋律（CF）として扱い、各拍で以下を満たす声部線を生成する:
+          1. 和音構成音（cs_harmony_plan の各拍の chord tone）
+          2. ICP 有効音程: 2度(1,2)・増4度(6)・7度(10,11) を禁止
+          3. 並行5度・8度なし（主題との間）
+          4. 旋律禁則なし（増4度・増5度・7度跳躍・増2度）
+          5. 順次進行優先（スコアリング）
+
+        Args:
+            subject_beats:          主題の拍ごとMIDIピッチリスト（subject_len 要素）
+                                    実際に配置される移調済みピッチ（例: -12 移調の Bass主題）を渡す。
+            cs_harmony_plan:        主題の和声計画（subject_len 拍）
+            cs_voice:               対主題担当声部（音域制約に使用）
+            ensure_gap_voice_range: (lo, hi) — CS と主題の間に挟まれる声部の音域。
+                                    この範囲内に少なくとも 1 つの和音構成音が存在するよう制約する。
+                                    4声配置での声部間隙を保証するために使用。
+            max_backtrack:          最大バックトラック回数
+
+        Returns:
+            対主題の拍ごとMIDIピッチリスト or None（解なし）
+        """
+        proh = CounterpointProhibitions()
+        lo, hi = VOICE_RANGES.get(cs_voice, (36, 84))
+        n = len(subject_beats)
+        key = cs_harmony_plan.key(0)
+
+        def _ic(a: int, b: int) -> int:
+            """音程クラス (mod 12)"""
+            return abs(a - b) % 12
+
+        def _valid_icp(cs: int, subj: int) -> bool:
+            return _ic(cs, subj) not in _ICP_FORBIDDEN
+
+        def _has_gap(cs: int, subj: int, beat: int) -> bool:
+            """CS と主題の間に中間声部用の和音構成音が存在するか検証。
+
+            ensure_gap_voice_range が指定された場合のみ検証する。
+            4声配置で CS が主題の直上に来すぎて中間声部の配置不可能になるのを防ぐ。
+            """
+            if ensure_gap_voice_range is None:
+                return True
+            gap_lo, gap_hi = ensure_gap_voice_range
+            chord_tones = cs_harmony_plan.chord(beat).tones
+            lo_pitch = min(cs, subj)
+            hi_pitch = max(cs, subj)
+            # lo_pitch と hi_pitch の間（exclusive）に gap_voice の和音構成音が存在するか
+            for m in range(max(lo_pitch + 1, gap_lo), min(hi_pitch, gap_hi + 1)):
+                if m % 12 in chord_tones:
+                    return True
+            return False
+
+        def _aug2(a: int, b: int) -> bool:
+            """増2度（短調 b6→#7 ペア）か"""
+            if abs(a - b) != 3:
+                return False
+            sc = key.scale
+            if len(sc) < 7:
+                return False
+            aug2_pair = {sc[5] % 12, sc[6] % 12}
+            return {a % 12, b % 12} == aug2_pair
+
+        # 各拍の基本候補: 和音構成音 ∩ 音域 ∩ ICP 有効 ∩ ギャップ確保
+        base_cands: List[List[int]] = []
+        for beat in range(n):
+            chord_tones = cs_harmony_plan.chord(beat).tones
+            subj = subject_beats[beat]
+            cands = [
+                m for m in range(lo, hi + 1)
+                if m % 12 in chord_tones
+                and _valid_icp(m, subj)
+                and _has_gap(m, subj, beat)
+            ]
+            base_cands.append(cands)
+
+        def _melodic_ok(cs: int, prev_cs: int, beat: int) -> bool:
+            """旋律禁則チェック（主題との並行・旋律線の両方）"""
+            prev_subj = subject_beats[beat - 1]
+            curr_subj = subject_beats[beat]
+            # 並行5度・8度（対主題と主題の間）
+            ok, _ = proh.check_parallel_perfect(prev_cs, cs, prev_subj, curr_subj)
+            if not ok:
+                return False
+            # 旋律禁則: 増4度・増5度
+            ok, _ = proh.check_melodic_augmented(prev_cs, cs)
+            if not ok:
+                return False
+            # 旋律禁則: 7度跳躍
+            ok, _ = proh.check_melodic_seventh(prev_cs, cs)
+            if not ok:
+                return False
+            # C17: 増2度（短調 b6→#7）
+            if _aug2(prev_cs, cs):
+                return False
+            return True
+
+        def _score(cs: int, beat: int, prev_cs: Optional[int]) -> float:
+            cost = 0.0
+            if prev_cs is not None:
+                interval = abs(cs - prev_cs)
+                if interval == 0:
+                    cost += 4.0        # 同音保持: ペナルティ
+                elif interval <= 2:
+                    cost -= 1.0        # 順次進行: ボーナス
+                elif interval <= 4:
+                    cost += 0.5        # 3度: 許容
+                elif interval <= 7:
+                    cost += 2.0        # 4〜5度
+                else:
+                    cost += 5.0        # 6度以上
+            # ICP 注意音程ペナルティ
+            ic = _ic(cs, subject_beats[beat])
+            if ic in _ICP_CAUTIOUS:
+                cost += 3.0
+            return cost
+
+        def _build_sorted(beat: int, prev_cs: Optional[int]) -> List[int]:
+            """フィルタ済み・スコアソート済み候補リストを生成。"""
+            if prev_cs is None:
+                filtered = list(base_cands[beat])
+            else:
+                filtered = [c for c in base_cands[beat]
+                            if _melodic_ok(c, prev_cs, beat)]
+            return sorted(filtered, key=lambda c: _score(c, beat, prev_cs))
+
+        # バックトラッキング
+        solution: List[Optional[Tuple[int, int]]] = [None] * n
+        sorted_cands: List[List[int]] = [[] for _ in range(n)]
+
+        beat = 0
+        backtracks = 0
+        while beat < n:
+            prev_cs: Optional[int] = (
+                solution[beat - 1][0] if beat > 0 and solution[beat - 1] else None
+            )
+
+            if solution[beat] is None:
+                # 新規到達: 候補リストを構築
+                sorted_cands[beat] = _build_sorted(beat, prev_cs)
+                start_idx = 0
+            else:
+                # バックトラックで戻ってきた: 次の候補から
+                start_idx = solution[beat][1] + 1
+                solution[beat] = None
+
+            found = False
+            for idx in range(start_idx, len(sorted_cands[beat])):
+                solution[beat] = (sorted_cands[beat][idx], idx)
+                found = True
+                break
+
+            if found:
+                beat += 1
+            else:
+                solution[beat] = None
+                beat -= 1
+                backtracks += 1
+                if beat < 0 or backtracks > max_backtrack:
+                    return None
+
+        self.countersubject = [solution[b][0] for b in range(n)]
+        return self.countersubject
 
     def compose(self) -> Optional[VoicePlan]:
         """フーガ全体を生成（Phase 1: 提示部のみ）。"""

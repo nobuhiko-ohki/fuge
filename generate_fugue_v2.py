@@ -274,6 +274,21 @@ def build_full_harmonic_plan(
 
 
 # ------------------------------------------------------------------
+# 対主題用 HarmonicPlan 構築ヘルパー
+# ------------------------------------------------------------------
+
+def _build_cs_harmonic_plan(key: Key, template: SubjectHarmonicTemplate) -> HarmonicPlan:
+    """主題の和声テンプレートから対主題用 HarmonicPlan (subject_len 拍) を構築。
+
+    generate_countersubject() に渡す cs_harmony_plan として使用する。
+    テンプレートの各 BeatHarmony を ChordLabel に変換する。
+    """
+    chords = [_beat_harmony_to_chord_label(bh, key) for bh in template.beats]
+    keys_list = [key] * len(chords)
+    return HarmonicPlan.from_lists(chords, keys_list)
+
+
+# ------------------------------------------------------------------
 # MIDI 書き出し
 # ------------------------------------------------------------------
 
@@ -356,12 +371,15 @@ def main():
     post_expo_sections = [
         # エピソード1: 全声部自由
         SectionSpec(start=EP1_START,  length=EP1_LEN),
-        # 中間部: Bass/Tenor 固定、Sop/Alto 自由
+        # 中間部: Bass 主題 + Tenor 応答 + 対主題（Alto が Bass に、Soprano が Tenor に寄り添う）
         SectionSpec(
             start=MID_START, length=MID_LEN,
             fixed_entries=[
                 (FugueVoiceType.BASS,  mid_bass_fixed),
                 (FugueVoiceType.TENOR, mid_tenor_fixed),
+            ],
+            cs_voices=[
+                (FugueVoiceType.ALTO, 0),  # Alto が Bass 主題に対主題
             ],
         ),
         # エピソード2: 全声部自由
@@ -377,6 +395,33 @@ def main():
     print(f"中間部 Bass 主題 (先頭5拍): {bass_subject_beats[:5]}")
     print(f"中間部 Tenor 応答 (先頭5拍): {tenor_answer_beats[:5]}")
 
+    # -----------------------------------------------
+    # 対主題を生成（シードに依存しない: 一度だけ実行）
+    # 実際に配置される Bass 主題 (-12 移調) を CF として転回対位法 (8度) で生成。
+    # Alto 対主題は Bass 主題に寄り添い、Tenor の配置余地を確保する。
+    # -----------------------------------------------
+    from fugue_realization import VOICE_RANGES as _VR
+    cs_harmony = _build_cs_harmonic_plan(key, ART_OF_FUGUE_HARMONY)
+    ref_composer = FugueComposer(structure, full_plan, seed=0)
+    # Bass 主題 (-12 移調) を CF として Alto 対主題を生成
+    cs_pitches = ref_composer.generate_countersubject(
+        subject_beats=bass_subject_beats,     # Bass 主題の実際のピッチ (-12)
+        cs_harmony_plan=cs_harmony,
+        cs_voice=FugueVoiceType.ALTO,
+        ensure_gap_voice_range=_VR[FugueVoiceType.TENOR],  # Tenor の配置余地を確保
+    )
+    if cs_pitches is None:
+        print("対主題生成失敗！候補なし。終了します。")
+        return
+    print(f"\n対主題生成成功 ({len(cs_pitches)} 拍):")
+    NOTE_NAMES = {0:'C',1:'C#',2:'D',3:'D#',4:'E',5:'F',
+                  6:'F#',7:'G',8:'G#',9:'A',10:'A#',11:'B'}
+    for i, (s, cs) in enumerate(zip(bass_subject_beats, cs_pitches)):
+        ic = abs(s - cs) % 12
+        ic_name = {0:'8度',3:'短3度',4:'長3度',5:'4度',7:'5度',8:'短6度',9:'長6度'}.get(ic, f'{ic}半音')
+        print(f"  beat{i:2d}: Bass={NOTE_NAMES.get(s%12,'?')}{s//12-1}({s}) "
+              f"Alto(CS)={NOTE_NAMES.get(cs%12,'?')}{cs//12-1}({cs}) [{ic_name}]")
+
     best = None
     best_errors = 9999
     best_warnings = 9999
@@ -386,6 +431,8 @@ def main():
     for seed in range(NUM_SEEDS):
         # Layer 2: 全体声部生成
         composer = FugueComposer(structure, full_plan, seed=seed)
+        # 事前生成した対主題を設定
+        composer.countersubject = cs_pitches
         voice_plan = composer.compose_full(post_expo_sections)
 
         if voice_plan is None:
