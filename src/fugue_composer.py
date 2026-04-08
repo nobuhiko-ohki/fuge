@@ -125,13 +125,15 @@ def _backtrack(
     voice_ranges: Dict[FugueVoiceType, Tuple[int, int]],
     prev_pitches: Optional[Dict[FugueVoiceType, Optional[int]]] = None,
     max_backtrack: int = 32,
-) -> Optional[Dict[FugueVoiceType, List[int]]]:
+    voice_start_beats: Optional[Dict[FugueVoiceType, int]] = None,
+) -> Optional[Dict[FugueVoiceType, List[Optional[int]]]]:
     """全声部をバックトラッキングで生成（拍単位ピン止め方式）。
 
     設計原則:
     - pinned[voice][beat] = 必須ピッチ（主題音符など）。レンジ外でも可。
     - それ以外の拍は和音構成音からバックトラッキングで最適選択。
-    - 全声部 (all_voices) が常に生成対象。
+    - voice_start_beats[voice] = その声部が入声する拍番号。
+      指定がある場合、入声前の拍は休止（None）のみが候補となる。
 
     Args:
         harmonic_plan: 不変の和声計画
@@ -140,9 +142,11 @@ def _backtrack(
         voice_ranges: {voice: (lo, hi)} 自由拍の音域制約
         prev_pitches: 直前拍の全声部ピッチ（区間連続性用）
         max_backtrack: 最大バックトラック深度
+        voice_start_beats: {voice: start_beat} 各声部の入声拍。
+                           None の場合は全声部が拍0から発音する。
 
     Returns:
-        {voice: [beat_pitch, ...]} or None（解なし）
+        {voice: [beat_pitch_or_None, ...]} or None（解なし）
     """
     if not all_voices:
         return {}
@@ -157,29 +161,38 @@ def _backtrack(
         return {va, vb} == {FugueVoiceType.SOPRANO, FugueVoiceType.BASS}
 
     # --- 各拍×各声部の候補リスト ---
+    # 未入声拍: [None] のみ（休止）
     # ピン止め拍: [required_pitch] のみ
     # 自由拍: レンジ内の和音構成音
-    candidates_per_beat: List[List[List[int]]] = []
+    candidates_per_beat: List[List[List[Optional[int]]]] = []
     for beat in range(num_beats):
         chord_tones = harmonic_plan.chord(beat).tones
-        beat_cands = []
+        beat_cands: List[List[Optional[int]]] = []
         for vt in all_voices:
-            if vt in pinned and beat in pinned[vt]:
+            # 未入声: 休止（None）のみ
+            if voice_start_beats and beat < voice_start_beats.get(vt, 0):
+                beat_cands.append([None])
+            elif vt in pinned and beat in pinned[vt]:
                 beat_cands.append([pinned[vt][beat]])
             else:
                 lo, hi = voice_ranges.get(vt, (36, 84))
-                cands = [m for m in range(lo, hi + 1) if m % 12 in chord_tones]
+                cands: List[Optional[int]] = [
+                    m for m in range(lo, hi + 1) if m % 12 in chord_tones
+                ]
                 beat_cands.append(cands)
         candidates_per_beat.append(beat_cands)
 
     def _prev_combo_to_dict(
-        prev_combo: Optional[Tuple[int, ...]],
+        prev_combo: Optional[Tuple[Optional[int], ...]],
     ) -> Dict[FugueVoiceType, int]:
-        """直前 combo タプル → 声部ピッチ辞書。beat=0 では prev_pitches を参照。"""
+        """直前 combo タプル → 声部ピッチ辞書。beat=0 では prev_pitches を参照。
+        None（休止）の声部は辞書に含まない。
+        """
         prev: Dict[FugueVoiceType, int] = {}
         if prev_combo is not None:
             for i, vt in enumerate(all_voices):
-                prev[vt] = prev_combo[i]
+                if prev_combo[i] is not None:
+                    prev[vt] = prev_combo[i]  # type: ignore[assignment]
         elif prev_pitches is not None:
             for vt, p in prev_pitches.items():
                 if p is not None:
@@ -188,12 +201,15 @@ def _backtrack(
 
     def check(
         beat: int,
-        combo: Tuple[int, ...],
-        prev_combo: Optional[Tuple[int, ...]],
+        combo: Tuple[Optional[int], ...],
+        prev_combo: Optional[Tuple[Optional[int], ...]],
     ) -> bool:
-        """全声部ペアの禁則を検証。"""
+        """全声部ペアの禁則を検証。None（休止）の声部は無視する。"""
+        # 発音中の声部のみ（None = 休止）
         curr: Dict[FugueVoiceType, int] = {
-            vt: combo[i] for i, vt in enumerate(all_voices)
+            vt: combo[i]  # type: ignore[misc]
+            for i, vt in enumerate(all_voices)
+            if combo[i] is not None
         }
         prev = _prev_combo_to_dict(prev_combo)
 
@@ -265,6 +281,8 @@ def _backtrack(
 
         # (6) 旋律制約（自由拍のみ。ピン止め拍への跳躍は主題の自由）
         for i, vt in enumerate(all_voices):
+            if combo[i] is None:
+                continue  # 休止声部は旋律制約なし
             if vt not in prev:
                 continue
             if vt in pinned and beat in pinned[vt]:
@@ -288,14 +306,16 @@ def _backtrack(
 
     def score(
         beat: int,
-        combo: Tuple[int, ...],
-        prev_combo: Optional[Tuple[int, ...]],
+        combo: Tuple[Optional[int], ...],
+        prev_combo: Optional[Tuple[Optional[int], ...]],
     ) -> float:
         """低い方が良い。自由拍の順次進行を好む。対斜をペナルティ。"""
         cost = 0.0
         prev = _prev_combo_to_dict(prev_combo)
 
         for i, vt in enumerate(all_voices):
+            if combo[i] is None:
+                continue  # 休止声部はスコア評価しない
             # ピン止め拍は評価しない
             if vt in pinned and beat in pinned[vt]:
                 continue
@@ -323,7 +343,7 @@ def _backtrack(
                 for a, b2 in (((t+10)%12, (t+11)%12), ((t+8)%12, (t+9)%12)):
                     cr_pairs.add((min(a, b2), max(a, b2)))
             prev_pcs = {prev[vt] % 12 for vt in prev}
-            curr_pcs = {combo[i] % 12 for i in range(len(all_voices))}
+            curr_pcs = {combo[i] % 12 for i in range(len(all_voices)) if combo[i] is not None}
             for lo_pc, hi_pc in cr_pairs:
                 if ((lo_pc in prev_pcs and hi_pc in curr_pcs) or
                         (hi_pc in prev_pcs and lo_pc in curr_pcs)):
@@ -338,6 +358,8 @@ def _backtrack(
             curr_chord_tones = harmonic_plan.chord(beat).tones
             if lt_pc not in curr_chord_tones:
                 for i, vt in enumerate(all_voices):
+                    if combo[i] is None:
+                        continue  # 休止声部は評価しない
                     if vt in pinned and beat in pinned[vt]:
                         continue  # ピン止め拍は主題の論理を尊重
                     if vt not in prev:
@@ -352,7 +374,7 @@ def _backtrack(
         return cost
 
     # --- バックトラッキング探索 ---
-    solution: List[Optional[Tuple[Tuple[int, ...], int]]] = [None] * num_beats
+    solution: List[Optional[Tuple[Tuple[Optional[int], ...], int]]] = [None] * num_beats
 
     beat = 0
     while beat < num_beats:
@@ -388,12 +410,12 @@ def _backtrack(
             if beat < 0 or (num_beats - 1 - beat) > max_backtrack:
                 return None  # 解なし
 
-    # 結果を辞書へ
-    result: Dict[FugueVoiceType, List[int]] = {vt: [] for vt in all_voices}
+    # 結果を辞書へ（None = 休止を含む）
+    result: Dict[FugueVoiceType, List[Optional[int]]] = {vt: [] for vt in all_voices}
     for b in range(num_beats):
         combo = solution[b][0]
         for i, vt in enumerate(all_voices):
-            result[vt].append(combo[i])
+            result[vt].append(combo[i])  # None の場合は休止
     return result
 
 
@@ -884,6 +906,13 @@ class FugueComposer:
             FugueVoiceType.BASS,
         ]
 
+        # 各声部の入声拍: エントリの start_position を使用
+        # 入声前の拍は休止（None）となり、本物のフーガ提示部らしい
+        # 順次入声が実現する。
+        voice_start_beats: Dict[FugueVoiceType, int] = {
+            entry.voice_type: entry.start_position for entry in entries
+        }
+
         result = _backtrack(
             harmonic_plan=HarmonicPlan.from_lists(
                 list(self.harmonic_plan.chord_plan[:total_beats]),
@@ -894,6 +923,7 @@ class FugueComposer:
             voice_ranges=VOICE_RANGES,
             prev_pitches=None,
             max_backtrack=128,
+            voice_start_beats=voice_start_beats,
         )
 
         if result is None:
