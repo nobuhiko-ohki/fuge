@@ -731,6 +731,87 @@ def build_midi(
     return result
 
 
+def build_midi_with_passing_tones(
+    voice_plan: VoicePlan,
+    harmonic_plan: HarmonicPlan,
+    voices_to_elaborate: Optional[List[FugueVoiceType]] = None,
+) -> Dict[FugueVoiceType, List[Tuple[int, int, int]]]:
+    """VoicePlan → MIDI データ（経過音付き）。
+
+    各声部の拍ごとピッチを検査し、連続する拍頭音が3度以上離れている場合に
+    スケール経過音（八分音符）を拍の後半に挿入する。
+
+    規則:
+      - 同音保持 (interval=0):  連続する同音をまとめて長い音符に
+      - 2度以内 (interval 1-2): 四分音符のまま（既に順次進行）
+      - 3度以上 (interval ≥ 3): 八分音符(拍頭音) + 八分音符(経過音)
+                                 経過音はその調のスケール上で
+                                 拍頭音と次拍頭音の間にある最初の音
+
+    Args:
+        voice_plan:          拍単位の声部計画
+        harmonic_plan:       和声計画（スケール情報に使用）
+        voices_to_elaborate: 経過音を付加する声部リスト（None = 全声部）
+
+    Returns:
+        {voice: [(start_tick, midi_pitch, duration_ticks), ...]}
+    """
+    half_tick = TICKS_PER_BEAT // 2   # 八分音符 = 240 ticks
+
+    result: Dict[FugueVoiceType, List[Tuple[int, int, int]]] = {}
+
+    for vt, pitch_tuple in voice_plan.pitches.items():
+        notes: List[Tuple[int, int, int]] = []
+        n = len(pitch_tuple)
+        elaborate = (voices_to_elaborate is None or vt in voices_to_elaborate)
+
+        i = 0
+        while i < n:
+            p = pitch_tuple[i]
+            if p is None:
+                i += 1
+                continue
+
+            start_tick = i * TICKS_PER_BEAT
+            p_next = pitch_tuple[i + 1] if i + 1 < n else None
+
+            # ── 同音保持: まとめて長い音符 ──────────────────────────────
+            if p_next is None or p_next == p:
+                k = i + 1
+                while k < n and pitch_tuple[k] == p:
+                    k += 1
+                notes.append((start_tick, p, (k - i) * TICKS_PER_BEAT))
+                i = k
+                continue
+
+            # ── 経過音を試みる ─────────────────────────────────────────
+            passing: Optional[int] = None
+            if elaborate:
+                interval = abs(p_next - p)
+                if interval >= 3:
+                    # スケール上の経過音を探す（p から p_next 方向に 1 音ずつ）
+                    scale_pcs: Set[int] = {pc % 12 for pc in harmonic_plan.key(i).scale}
+                    direction = 1 if p_next > p else -1
+                    for candidate in range(p + direction, p_next, direction):
+                        if candidate % 12 in scale_pcs:
+                            passing = candidate
+                            break
+
+            if passing is not None:
+                # 八分音符(拍頭音) + 八分音符(経過音)
+                notes.append((start_tick,             p,       half_tick))
+                notes.append((start_tick + half_tick, passing, half_tick))
+            else:
+                # 四分音符（2度以内、またはスケール経過音なし）
+                notes.append((start_tick, p, TICKS_PER_BEAT))
+
+            i += 1
+
+        result[vt] = notes
+
+    return result
+
+
 def apply_note_events_to_midi(
     midi_data: Dict[FugueVoiceType, List[Tuple[int, int, int]]],
     voice: FugueVoiceType,

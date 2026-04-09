@@ -23,7 +23,8 @@ from fugue_realization import (
 from midi_writer import MIDIWriter
 from fugue_composer import (
     HarmonicPlan, FugueComposer, SectionSpec,
-    build_midi, apply_note_events_to_midi, validate,
+    build_midi, build_midi_with_passing_tones,
+    apply_note_events_to_midi, validate,
     TICKS_PER_BEAT,
 )
 
@@ -468,8 +469,8 @@ def main():
         for w in report.warnings:
             print(f"  [WARN]  m{w.measure}.{w.beat_in_measure}: {w.description}")
 
-    # Layer 3: MIDI 出力（ビートグリッドを NoteEvents で上書きし sub-beat 復元）
-    midi_data = build_midi(voice_plan)
+    # Layer 3: MIDI 出力（経過音付き八分音符化 → NoteEvents で主題部を上書き）
+    midi_data = build_midi_with_passing_tones(voice_plan, full_plan)
 
     # --- 提示部: 主題/応答の NoteEvents を正確な duration で上書き ---
     # compose_exposition() と同じロジックで移調量を計算
