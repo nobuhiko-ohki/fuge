@@ -789,8 +789,17 @@ def build_midi_with_passing_tones(
             if elaborate:
                 interval = abs(p_next - p)
                 if interval >= 3:
-                    # スケール上の経過音を探す（p から p_next 方向に 1 音ずつ）
-                    scale_pcs: Set[int] = {pc % 12 for pc in harmonic_plan.key(i).scale}
+                    # 経過音スケール: 自然短音階（ナチュラルマイナー）を使用。
+                    # ハーモニックマイナーの導音（C#）は和声的短音階特有で、
+                    # 自由経過音に使うと ♭6(Bb)→#7(C#) の増2度が生じて半音階風になる。
+                    # 自然短音階 = ハーモニックマイナーの導音を長7音（tonic-2）に置換。
+                    key_at = harmonic_plan.key(i)
+                    lt_pc = key_at.leading_tone_pc
+                    nat7_pc = (key_at.tonic_pc - 2) % 12
+                    scale_pcs: Set[int] = {
+                        (nat7_pc if pc % 12 == lt_pc else pc % 12)
+                        for pc in key_at.scale
+                    }
                     direction = 1 if p_next > p else -1
                     for candidate in range(p + direction, p_next, direction):
                         if candidate % 12 in scale_pcs:
