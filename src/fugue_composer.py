@@ -789,22 +789,49 @@ def build_midi_with_passing_tones(
             if elaborate:
                 interval = abs(p_next - p)
                 if interval >= 3:
-                    # 経過音スケール: 自然短音階（ナチュラルマイナー）を使用。
-                    # ハーモニックマイナーの導音（C#）は和声的短音階特有で、
-                    # 自由経過音に使うと ♭6(Bb)→#7(C#) の増2度が生じて半音階風になる。
-                    # 自然短音階 = ハーモニックマイナーの導音を長7音（tonic-2）に置換。
+                    # 経過音の選択原則:
+                    # 「その調の自然短音階（ナチュラルマイナー）にない和音構成音
+                    #  （= 変化音・臨時記号音）の ±1 半音は経過音に使わない」
+                    #
+                    # 理由: 変化音はその和音の機能を定義する核心音であり、
+                    #   半音差の音を鳴らすとその意図が消える。
+                    #   例) A major の C# (臨時)→ C は forbidden
+                    #       Dm の F (自然音)→ E は OK（D 短調で自然な経過音）
+                    #
+                    # 自然短音階 = ハーモニックマイナーの導音を長7音(tonic-2)に置換
                     key_at = harmonic_plan.key(i)
                     lt_pc = key_at.leading_tone_pc
                     nat7_pc = (key_at.tonic_pc - 2) % 12
-                    scale_pcs: Set[int] = {
+                    natural_scale_pcs: Set[int] = {
                         (nat7_pc if pc % 12 == lt_pc else pc % 12)
                         for pc in key_at.scale
                     }
+                    chord_pcs: Set[int] = harmonic_plan.chord(i).tones
+                    # 変化音（自然短音階にない和音構成音）の ±1 を禁止
+                    forbidden_pcs: Set[int] = set()
+                    for ct in chord_pcs:
+                        if ct not in natural_scale_pcs:
+                            forbidden_pcs.add((ct + 1) % 12)
+                            forbidden_pcs.add((ct - 1) % 12)
+                    # 和音構成音自体は経過音として使わない
+                    forbidden_pcs |= chord_pcs
+
                     direction = 1 if p_next > p else -1
                     for candidate in range(p + direction, p_next, direction):
-                        if candidate % 12 in scale_pcs:
-                            passing = candidate
-                            break
+                        cpc = candidate % 12
+                        # 条件1: 自然短音階内の音のみ経過音として使用
+                        if cpc not in natural_scale_pcs:
+                            continue
+                        # 条件2: 変化音の±1半音は避ける
+                        if cpc in forbidden_pcs:
+                            continue
+                        # 条件3: 経過音への跳躍が旋律禁則（増4度=6半音、増5度=8半音）
+                        #        にならないか確認。ならば経過音なし（四分音符）のまま。
+                        leap = abs(candidate - p)
+                        if leap == 6 or leap == 8:
+                            break  # この方向でこれ以上探しても悪化するだけ
+                        passing = candidate
+                        break
 
             if passing is not None:
                 # 八分音符(拍頭音) + 八分音符(経過音)
